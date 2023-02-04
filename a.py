@@ -18,8 +18,7 @@ app_id = "GCN4EESH58-100"
 redirect_uri="http://127.0.0.1"
 response_type="code"
 grant_type = "authorization_code"
-access_token = '';
-
+fyers = None
 atr_period = 10
 atr_multiplier = 3
 timeframe = 3
@@ -29,8 +28,8 @@ orderPlaced = False
 nPointsCaptured = 0
 nPreviousOrderPrice = 0;
 bLiveMode = False
-start_date = datetime.date(2023, 1, 1)
-end_date = datetime.date(2023, 1, 26)
+start_date = datetime.date(2023, 2, 3)
+end_date = datetime.date(2023, 2, 4)
 bCloseDay = False
 bDetailedLog = False
 index_symbol = "NSE:NIFTYBANK-INDEX"
@@ -46,9 +45,7 @@ if bLiveMode:
 
 resultdf = pd.DataFrame(index=[0])
 
-# currentFuture = f"NSE:BANKNIFTY23FEBFUT"
-currentFuture = f"NSE:BANKNIFTY23JANFUT"
-# print(currentFuture)
+currentFuture = f"NSE:BANKNIFTY23FEBFUT"
 # currentFuture = f"NSE:NIFTY{y}NOVFUT"
 pd.set_option("display.max_rows", None)
 
@@ -60,18 +57,19 @@ def t(msg):
   return requests.get(link).json()
 
 def login():
+  global fyers, app_id, secret_key, redirect_uri, response_type, grant_type
   print('Logging in')
 
   session=accessToken.SessionModel(client_id=app_id,secret_key=secret_key,redirect_uri=redirect_uri, response_type=response_type, grant_type=grant_type)
 
-  if(os.path.getsize('sample.txt')>0):
+  if(os.path.exists('sample.txt') and os.path.getsize('sample.txt')>0):
     f = open("sample.txt", 'r')
     txt = json.loads(f.read())
     auth_code = txt['auth_code']
     session.set_token(auth_code)
-    response = txt['token']
+    access_token = txt['access_token']
+    fyers = fyersModel.FyersModel(token=access_token, is_async=False, log_path="logs", client_id=app_id)
     f.close()
-    return response;
   else:
     f = open("sample.txt", "w")
     response = session.generate_authcode()
@@ -81,22 +79,18 @@ def login():
     session.set_token(auth_code)
     response = session.generate_token()
     
-    f.write(json.dumps({'auth_code': auth_code, 'token': response['access_token']}))
-    f.close()
-
     if(response["s"]=="ok"):
-      print(response)
-      return response["access_token"]
-    else:
-      print("error occured, please try again")
-      login()
+      # print(response)
+      access_token = response['access_token']
+      f.write(json.dumps({'auth_code': auth_code, 'access_token': access_token}))
+      f.close()
+      fyers = fyersModel.FyersModel(token=access_token, is_async=False, log_path="logs", client_id=app_id)
 
 def getTime():
     return datetime.now(tz_NY).strftime("%Y-%m-%d %I:%M:%S %p")
 
 def get_data(range_from, range_to, symbol):
-  global fyers, timeframe
-  print('get data for', range_from, range_to, symbol)
+  global timeframe
   data = {"symbol":symbol,"resolution":timeframe,"date_format":"1","range_from":range_from,"range_to":range_to,"cont_flag":"1"}
   print(fyers.history(data))
   ss = fyers.history(data)['candles']
@@ -369,99 +363,42 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
     print('points till now', nPointsCaptured)
 
 def EMA(df, base, target, period, alpha=False):
-    """
-    Function to compute Exponential Moving Average (EMA)
-    Args :
-        df : Pandas DataFrame which contains ['date', 'open', 'high', 'low', 'close', 'volume'] columns
-        base : String indicating the column name from which the EMA needs to be computed from
-        target : String indicates the column name to which the computed data needs to be stored
-        period : Integer indicates the period of computation in terms of number of candles
-        alpha : Boolean if True indicates to use the formula for computing EMA using alpha (default is False)
-    Returns :
-        df : Pandas DataFrame with new column added with name 'target'
-    """
+  con = pd.concat([df[:period][base].rolling(window=period).mean(), df[period:][base]])
 
-    con = pd.concat([df[:period][base].rolling(window=period).mean(), df[period:][base]])
+  if (alpha == True):
+      # (1 - alpha) * previous_val + alpha * current_val where alpha = 1 / period
+      df[target] = con.ewm(alpha=1 / period, adjust=False).mean()
+  else:
+      # ((current_val - previous_val) * coeff) + previous_val where coeff = 2 / (period + 1)
+      df[target] = con.ewm(span=period, adjust=False).mean()
 
-    if (alpha == True):
-        # (1 - alpha) * previous_val + alpha * current_val where alpha = 1 / period
-        df[target] = con.ewm(alpha=1 / period, adjust=False).mean()
-    else:
-        # ((current_val - previous_val) * coeff) + previous_val where coeff = 2 / (period + 1)
-        df[target] = con.ewm(span=period, adjust=False).mean()
-
-    df[target].fillna(0, inplace=True)
-    return df
+  df[target].fillna(0, inplace=True)
+  return df
 
 def ATR(df, period, ohlc=['open', 'high', 'low', 'close']):
-    """
-    Function to compute Average True Range (ATR)
-    Args :
-        df : Pandas DataFrame which contains ['date', 'open', 'high', 'low', 'close', 'volume'] columns
-        period : Integer indicates the period of computation in terms of number of candles
-        ohlc: List defining OHLC Column names (default ['Open', 'High', 'Low', 'Close'])
-    Returns :
-        df : Pandas DataFrame with new columns added for
-            True Range (TR)
-            ATR (ATR_$period)
-    """
-    atr = 'ATR_' + str(period)
+  atr = 'ATR_' + str(period)
 
-    # Compute true range only if it is not computed and stored earlier in the df
-    if not 'TR' in df.columns:
-        df['h-l'] = df[ohlc[1]] - df[ohlc[2]]
-        df['h-yc'] = abs(df[ohlc[1]] - df[ohlc[3]].shift())
-        df['l-yc'] = abs(df[ohlc[2]] - df[ohlc[3]].shift())
+  # Compute true range only if it is not computed and stored earlier in the df
+  if not 'TR' in df.columns:
+      df['h-l'] = df[ohlc[1]] - df[ohlc[2]]
+      df['h-yc'] = abs(df[ohlc[1]] - df[ohlc[3]].shift())
+      df['l-yc'] = abs(df[ohlc[2]] - df[ohlc[3]].shift())
 
-        df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
+      df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
 
-        df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
+      df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
 
-    # Compute EMA of true range using ATR formula after ignoring first row
-    EMA(df, 'TR', atr, period, alpha=True)
+  # Compute EMA of true range using ATR formula after ignoring first row
+  EMA(df, 'TR', atr, period, alpha=True)
 
-    return df
+  return df
 
 def Supertrend_kite(df, period = 10, multiplier=3, ohlc=['open', 'high', 'low', 'close']):
-    """
-    Function to compute SuperTrend
-    Args :
-        df : Pandas DataFrame which contains ['date', 'open', 'high', 'low', 'close', 'volume'] columns
-        period : Integer indicates the period of computation in terms of number of candles
-        multiplier : Integer indicates value to multiply the ATR
-        ohlc: List defining OHLC Column names (default ['Open', 'High', 'Low', 'Close'])
-    Returns :
-        df : Pandas DataFrame with new columns added for
-            True Range (TR), ATR (ATR_$period)
-            SuperTrend (ST_$period_$multiplier)
-            SuperTrend Direction (STX_$period_$multiplier)
-    """
 
     ATR(df, period, ohlc=ohlc)
     atr = 'ATR_' + str(period)
     st = 'ST' #+ str(period) + '_' + str(multiplier)
     stx = 'STX' #  + str(period) + '_' + str(multiplier)
-
-    """
-    SuperTrend Algorithm :
-        BASIC UPPERBAND = (HIGH + LOW) / 2 + Multiplier * ATR
-        BASIC LOWERBAND = (HIGH + LOW) / 2 - Multiplier * ATR
-        FINAL UPPERBAND = IF( (Current BASICUPPERBAND < Previous FINAL UPPERBAND) or (Previous Close > Previous FINAL UPPERBAND))
-                            THEN (Current BASIC UPPERBAND) ELSE Previous FINALUPPERBAND)
-        FINAL LOWERBAND = IF( (Current BASIC LOWERBAND > Previous FINAL LOWERBAND) or (Previous Close < Previous FINAL LOWERBAND)) 
-                            THEN (Current BASIC LOWERBAND) ELSE Previous FINAL LOWERBAND)
-        SUPERTREND = IF((Previous SUPERTREND = Previous FINAL UPPERBAND) and (Current Close <= Current FINAL UPPERBAND)) THEN
-                        Current FINAL UPPERBAND
-                    ELSE
-                        IF((Previous SUPERTREND = Previous FINAL UPPERBAND) and (Current Close > Current FINAL UPPERBAND)) THEN
-                            Current FINAL LOWERBAND
-                        ELSE
-                            IF((Previous SUPERTREND = Previous FINAL LOWERBAND) and (Current Close >= Current FINAL LOWERBAND)) THEN
-                                Current FINAL LOWERBAND
-                            ELSE
-                                IF((Previous SUPERTREND = Previous FINAL LOWERBAND) and (Current Close < Current FINAL LOWERBAND)) THEN
-                                    Current FINAL UPPERBAND
-    """
 
     # Compute basic upper and lower bands
     df['basic_ub'] = (df[ohlc[1]] + df[ohlc[2]]) / 2 + multiplier * df[atr]
@@ -499,15 +436,13 @@ def Supertrend_kite(df, period = 10, multiplier=3, ohlc=['open', 'high', 'low', 
     df.fillna(0, inplace=True)
     return df
 
-
 def main():
-    global access_token, fyers, bLiveMode
-    access_token = login()
-    fyers = fyersModel.FyersModel(token=access_token, is_async=False, log_path="/", client_id=app_id)
-    if bLiveMode:
-      startLive()
-    else:
-      startHistorical()
+  global bLiveMode
+  login()
+  if bLiveMode:
+    startLive()
+  else:
+    startHistorical()
         
 if __name__ == "__main__":
-    main()
+  main()
