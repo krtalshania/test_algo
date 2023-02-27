@@ -27,7 +27,7 @@ initial = True
 orderPlaced = False
 nPointsCaptured = 0
 nPreviousOrderPrice = 0;
-bLiveMode = False
+bLiveMode = True
 start_date = datetime.date(2023, 2, 3)
 end_date = datetime.date(2023, 2, 4)
 bCloseDay = False
@@ -45,7 +45,7 @@ if bLiveMode:
 
 resultdf = pd.DataFrame(index=[0])
 
-currentFuture = f"NSE:BANKNIFTY23FEBFUT"
+currentFuture = f"NSE:BANKNIFTY23MARFUT"
 # currentFuture = f"NSE:NIFTY{y}NOVFUT"
 pd.set_option("display.max_rows", None)
 
@@ -92,7 +92,7 @@ def getTime():
 def get_data(range_from, range_to, symbol):
   global timeframe
   data = {"symbol":symbol,"resolution":timeframe,"date_format":"1","range_from":range_from,"range_to":range_to,"cont_flag":"1"}
-  print(fyers.history(data))
+  # print(fyers.history(data))
   ss = fyers.history(data)['candles']
   # print(ss)
   df = pd.DataFrame(data=ss,columns=['date', 'open','high','low','close','volume'])
