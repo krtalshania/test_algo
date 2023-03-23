@@ -1,15 +1,12 @@
-import requests
 import pytz
 from fyers_api import fyersModel, accessToken
 from fyers_api.Websocket import ws
 import pandas as pd
-import numpy as np
-import math
 import time, datetime
 from urllib import parse
 import json
 import os
-import calendar
+import my_modules
 
 tz_NY  = pytz.timezone('Asia/Kolkata')
 
@@ -19,25 +16,24 @@ redirect_uri="http://127.0.0.1"
 response_type="code"
 grant_type = "authorization_code"
 fyers = None
-atr_period = 10
-atr_multiplier = 3
-timeframe = 3
+atr_period = 7
+atr_multiplier = 2.5
+timeframe = 1
 currentTrend = ''
 initial = True
 orderPlaced = False
 nPointsCaptured = 0
 nPreviousOrderPrice = 0;
 bLiveMode = True
-start_date = datetime.date(2023, 2, 3)
-end_date = datetime.date(2023, 2, 4)
+bPlaceOrderInLiveMode = False
+start_date = datetime.date(2023, 3, 20)
+end_date = datetime.date(2023, 3, 21)
 bCloseDay = False
-bDetailedLog = False
+bDetailedLog = True
 index_symbol = "NSE:NIFTYBANK-INDEX"
-# index_symbol = "NSE:NIFTY50-INDEX"
 
 square_off_time = datetime.time(15,18)
 trade_start_time = datetime.time(9,18)
-# print(square_off_time)
 
 if bLiveMode:
   start_date = datetime.date.today()
@@ -46,15 +42,7 @@ if bLiveMode:
 resultdf = pd.DataFrame(index=[0])
 
 currentFuture = f"NSE:BANKNIFTY23MARFUT"
-# currentFuture = f"NSE:NIFTY{y}NOVFUT"
 pd.set_option("display.max_rows", None)
-
-
-def t(msg):
-  bot_token = '5124822628:AAExc_63O4Euolz7CRJyGSlOwQc6kP8-jh8'
-  bot_chatID = '499083936'
-  link = 'https://api.telegram.org/bot'+bot_token+'/sendMessage?chat_id='+bot_chatID+'&parse_mode=MarkdownV2&text=' + msg
-  return requests.get(link).json()
 
 def login():
   global fyers, app_id, secret_key, redirect_uri, response_type, grant_type
@@ -86,46 +74,18 @@ def login():
       f.close()
       fyers = fyersModel.FyersModel(token=access_token, is_async=False, log_path="logs", client_id=app_id)
 
-def getTime():
-    return datetime.now(tz_NY).strftime("%Y-%m-%d %I:%M:%S %p")
-
-def get_data(range_from, range_to, symbol):
-  global timeframe
-  data = {"symbol":symbol,"resolution":timeframe,"date_format":"1","range_from":range_from,"range_to":range_to,"cont_flag":"1"}
-  # print(fyers.history(data))
-  ss = fyers.history(data)['candles']
-  # print(ss)
-  df = pd.DataFrame(data=ss,columns=['date', 'open','high','low','close','volume'])
-  df['date'] =[ datetime.datetime.fromtimestamp(float(x),tz_NY).strftime('%Y-%m-%d %I:%M:%S %p') for x in df['date']]
-  return df
-
-def getQuote(symbol):
-  global fyers
-  return fyers.quotes({"symbols":symbol})
-
-def getLTP(symbol):
-  global fyers
-  q = fyers.quotes({"symbols":symbol})['d'][0]['v']['lp']
-  # print(q)
-  return q
-
-def daterange(start_date, end_date):
-  for n in range(int((end_date - start_date).days)):
-      yield start_date + datetime.timedelta(n)
-
 def getHistoricalData(range_from, range_to, symbol):
-  # d = (range_from - datetime.timedelta(days=1))#.strftime('%Y-%m-%d')
-  # print('122',d)
+  global fyers, timeframe, atr_period
   d = range_from.strftime('%Y-%m-%d')
-  last_data = get_data(d, d, symbol).tail(10)
+  last_data = my_modules.get_data(fyers, timeframe, d, d, symbol).tail(atr_period)
   if(last_data.empty):
     prev_day = (d - datetime.timedelta(days=1))#.strftime('%Y-%m-%d') #datetime.datetime.strptime(d,"%Y-%m-%d")
     last_data = getHistoricalData(prev_day, range_to, symbol)
       
-  df = pd.concat([last_data,get_data(range_from, range_to, symbol)],ignore_index=True)
+  df = pd.concat([last_data,my_modules.get_data(fyers, timeframe, range_from, range_to, symbol)],ignore_index=True)
   df.reset_index(drop=True, inplace=True)
   if not df.empty:
-    return Supertrend_kite(df.drop(['volume'], axis=1))
+    return my_modules.Supertrend_kite(df.drop(['volume'], axis=1), atr_period, atr_multiplier)
 
 def processHistoricalSupertrend(day, df):
   global nPointsCaptured, resultdf, square_off_time
@@ -168,7 +128,7 @@ def processHistoricalSupertrend(day, df):
 
 def startHistorical():
   global resultdf, start_date, end_date, timeframe, index_symbol, atr_period
-  for single_date in daterange(start_date, end_date):
+  for single_date in my_modules.daterange(start_date, end_date):
     if(single_date.weekday() in [5,6]):
       continue
     histdata = getHistoricalData(single_date, single_date, index_symbol)
@@ -188,7 +148,7 @@ def startHistorical():
   # display(resultdf)
 
 def startLive():
-  global resultdf, start_date, end_date, timeframe, bCloseDay, nPreviousOrderPrice, currentTrend, tz_NY, index_symbol, currentFuture, worksheet, atr_period
+  global fyers,resultdf, start_date, end_date, timeframe, bCloseDay, nPreviousOrderPrice, currentTrend, tz_NY, index_symbol, currentFuture, worksheet, atr_period
   while True:
     now = datetime.datetime.now(tz_NY).time()
     if now < trade_start_time:
@@ -202,7 +162,7 @@ def startLive():
     data = getHistoricalData(start_date, end_date, index_symbol).tail(atr_period)
     # display(data)
     # worksheet.update([data.columns.values.tolist()] + data.values.tolist())
-    futLTP = getLTP(currentFuture)
+    futLTP = my_modules.getLTP(fyers,currentFuture)
     currentTrendString = 'sell' if currentTrend=='down' else 'buy'
     if orderPlaced:
       points = futLTP - nPreviousOrderPrice if currentTrend=='up' else nPreviousOrderPrice - futLTP
@@ -288,7 +248,7 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
           "offlineOrder":"False",
           "stopLoss":0
       }
-      if bLiveMode:
+      if bLiveMode and bPlaceOrderInLiveMode:
         fyers.exit_positions({})
         res = fyers.place_order(data)
         print(res)
@@ -310,7 +270,7 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
           "offlineOrder":"False",
           "stopLoss":0
       }
-      if bLiveMode:
+      if bLiveMode and bPlaceOrderInLiveMode:
         res = fyers.place_order(data)
         print(res)
       nPreviousOrderPrice = ltp
@@ -333,7 +293,7 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
           "offlineOrder":"False",
           "stopLoss":0
       }
-      if bLiveMode:
+      if bLiveMode and bPlaceOrderInLiveMode:
         res = fyers.place_order(data)
         print(res)
       nPointsCaptured = nPointsCaptured + points
@@ -354,7 +314,7 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
           "offlineOrder":"False",
           "stopLoss":0
       }
-      if bLiveMode:
+      if bLiveMode and bPlaceOrderInLiveMode:
         res = fyers.place_order(data)
         print(res)
       nPreviousOrderPrice = ltp
@@ -362,79 +322,6 @@ def placeOrder(dt,ltp, trend, closeTheDay = False):
   if(bDetailedLog):
     print('points till now', nPointsCaptured)
 
-def EMA(df, base, target, period, alpha=False):
-  con = pd.concat([df[:period][base].rolling(window=period).mean(), df[period:][base]])
-
-  if (alpha == True):
-      # (1 - alpha) * previous_val + alpha * current_val where alpha = 1 / period
-      df[target] = con.ewm(alpha=1 / period, adjust=False).mean()
-  else:
-      # ((current_val - previous_val) * coeff) + previous_val where coeff = 2 / (period + 1)
-      df[target] = con.ewm(span=period, adjust=False).mean()
-
-  df[target].fillna(0, inplace=True)
-  return df
-
-def ATR(df, period, ohlc=['open', 'high', 'low', 'close']):
-  atr = 'ATR_' + str(period)
-
-  # Compute true range only if it is not computed and stored earlier in the df
-  if not 'TR' in df.columns:
-      df['h-l'] = df[ohlc[1]] - df[ohlc[2]]
-      df['h-yc'] = abs(df[ohlc[1]] - df[ohlc[3]].shift())
-      df['l-yc'] = abs(df[ohlc[2]] - df[ohlc[3]].shift())
-
-      df['TR'] = df[['h-l', 'h-yc', 'l-yc']].max(axis=1)
-
-      df.drop(['h-l', 'h-yc', 'l-yc'], inplace=True, axis=1)
-
-  # Compute EMA of true range using ATR formula after ignoring first row
-  EMA(df, 'TR', atr, period, alpha=True)
-
-  return df
-
-def Supertrend_kite(df, period = 10, multiplier=3, ohlc=['open', 'high', 'low', 'close']):
-
-    ATR(df, period, ohlc=ohlc)
-    atr = 'ATR_' + str(period)
-    st = 'ST' #+ str(period) + '_' + str(multiplier)
-    stx = 'STX' #  + str(period) + '_' + str(multiplier)
-
-    # Compute basic upper and lower bands
-    df['basic_ub'] = (df[ohlc[1]] + df[ohlc[2]]) / 2 + multiplier * df[atr]
-    df['basic_lb'] = (df[ohlc[1]] + df[ohlc[2]]) / 2 - multiplier * df[atr]
-
-    # Compute final upper and lower bands
-    df['final_ub'] = 0.00
-    df['final_lb'] = 0.00
-    for i in range(period, len(df)):
-        df['final_ub'].iat[i] = df['basic_ub'].iat[i] if df['basic_ub'].iat[i] < df['final_ub'].iat[i - 1] or \
-                                                         df[ohlc[3]].iat[i - 1] > df['final_ub'].iat[i - 1] else \
-        df['final_ub'].iat[i - 1]
-        df['final_lb'].iat[i] = df['basic_lb'].iat[i] if df['basic_lb'].iat[i] > df['final_lb'].iat[i - 1] or \
-                                                         df[ohlc[3]].iat[i - 1] < df['final_lb'].iat[i - 1] else \
-        df['final_lb'].iat[i - 1]
-
-    # Set the Supertrend value
-    df[st] = 0.00
-    for i in range(period, len(df)):
-        df[st].iat[i] = df['final_ub'].iat[i] if df[st].iat[i - 1] == df['final_ub'].iat[i - 1] and df[ohlc[3]].iat[
-            i] <= df['final_ub'].iat[i] else \
-            df['final_lb'].iat[i] if df[st].iat[i - 1] == df['final_ub'].iat[i - 1] and df[ohlc[3]].iat[i] > \
-                                     df['final_ub'].iat[i] else \
-                df['final_lb'].iat[i] if df[st].iat[i - 1] == df['final_lb'].iat[i - 1] and df[ohlc[3]].iat[i] >= \
-                                         df['final_lb'].iat[i] else \
-                    df['final_ub'].iat[i] if df[st].iat[i - 1] == df['final_lb'].iat[i - 1] and df[ohlc[3]].iat[i] < \
-                                             df['final_lb'].iat[i] else 0.00
-
-        # Mark the trend direction up/down
-    df[stx] = np.where((df[st] > 0.00), np.where((df[ohlc[3]] < df[st]), 'down', 'up'), np.NaN)
-
-    # Remove basic and final bands from the columns
-    df.drop(['basic_ub', 'basic_lb', 'final_ub', 'final_lb'], inplace=True, axis=1)
-
-    df.fillna(0, inplace=True)
-    return df
 
 def main():
   global bLiveMode
