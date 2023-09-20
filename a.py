@@ -18,7 +18,7 @@ grant_type = "authorization_code"
 fyers = None
 atr_period = 7
 atr_multiplier = 2.5
-timeframe = 1
+timeframe = 3
 currentTrend = ''
 initial = True
 orderPlaced = False
@@ -41,7 +41,7 @@ if bLiveMode:
 
 resultdf = pd.DataFrame(index=[0])
 
-currentFuture = f"NSE:BANKNIFTY23MARFUT"
+currentFuture = f"NSE:BANKNIFTY23JULFUT"
 pd.set_option("display.max_rows", None)
 
 def login():
@@ -74,18 +74,7 @@ def login():
       f.close()
       fyers = fyersModel.FyersModel(token=access_token, is_async=False, log_path="logs", client_id=app_id)
 
-def getHistoricalData(range_from, range_to, symbol):
-  global fyers, timeframe, atr_period
-  d = range_from.strftime('%Y-%m-%d')
-  last_data = my_modules.get_data(fyers, timeframe, d, d, symbol).tail(atr_period)
-  if(last_data.empty):
-    prev_day = (d - datetime.timedelta(days=1))#.strftime('%Y-%m-%d') #datetime.datetime.strptime(d,"%Y-%m-%d")
-    last_data = getHistoricalData(prev_day, range_to, symbol)
-      
-  df = pd.concat([last_data,my_modules.get_data(fyers, timeframe, range_from, range_to, symbol)],ignore_index=True)
-  df.reset_index(drop=True, inplace=True)
-  if not df.empty:
-    return my_modules.Supertrend_kite(df.drop(['volume'], axis=1), atr_period, atr_multiplier)
+
 
 def processHistoricalSupertrend(day, df):
   global nPointsCaptured, resultdf, square_off_time
@@ -159,8 +148,8 @@ def startLive():
 
   print(f'Refreshing every {timeframe} minutes')
   while not bCloseDay:
-    data = getHistoricalData(start_date, end_date, index_symbol).tail(atr_period)
-    # display(data)
+    data = my_modules.getHistoricalData(start_date, end_date, index_symbol, fyers, timeframe, atr_period, atr_multiplier).tail(atr_period)
+    # print(data)
     # worksheet.update([data.columns.values.tolist()] + data.values.tolist())
     futLTP = my_modules.getLTP(fyers,currentFuture)
     currentTrendString = 'sell' if currentTrend=='down' else 'buy'
